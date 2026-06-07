@@ -101,6 +101,7 @@ let s:default_config = {
     \ 'keymap_inst_cancel':     "<Esc>",
     \ 'keymap_debug_toggle':    "<leader>lld",
     \ 'enable_at_startup':      v:true,
+    \ 'completion_log':         '~/.local/share/llama-completions.jsonl',
     \ }
 
 let llama_config = get(g:, 'llama_config', s:default_config)
@@ -450,6 +451,7 @@ function! llama#init()
     let s:ring_n_evict = 0
 
     let s:fim_hint_shown = v:false
+    let s:fim_accepted = v:false
     let s:pos_y_pick = -9999 " last y where we picked a chunk
     let s:indent_last = -1   " last indentation level that was accepted (TODO: this might be buggy)
 
@@ -1224,6 +1226,27 @@ function! s:fim_try_hint(pos_x, pos_y)
     endif
 endfunction
 
+" log a completion event to JSONL file
+" a:event  - 'shown', 'accept_full', 'accept_line', 'accept_word', 'dismissed'
+" a:extra  - dict of extra fields to merge
+function! s:completion_log(event, extra) abort
+    let l:logfile = g:llama_config.completion_log
+    if empty(l:logfile)
+        return
+    endif
+    let l:logfile = expand(l:logfile)
+
+    let l:entry = {
+        \ 'ts':         strftime('%Y-%m-%dT%H:%M:%S'),
+        \ 'event':      a:event,
+        \ 'filetype':   &filetype,
+        \ 'filename':   expand('%:t'),
+        \ }
+    call extend(l:entry, a:extra)
+
+    call writefile([json_encode(l:entry)], l:logfile, 'a')
+endfunction
+
 " render a suggestion at the current cursor location
 " a:responses  - list of response objects from cache
 " a:selected   - index of the currently selected completion
@@ -1471,6 +1494,22 @@ function! s:fim_render(pos_x, pos_y, responses, selected)
     let s:fim_data['content']     = l:content
     let s:fim_data['responses']   = a:responses
     let s:fim_data['selected']    = a:selected
+
+    if l:can_accept && len(l:content) > 0
+        let l:n_lines = len(l:content)
+        let l:n_chars = 0
+        for l:c in l:content
+            let l:n_chars += len(l:c)
+        endfor
+        call s:completion_log('shown', {
+            \ 'n_lines':       l:n_lines,
+            \ 'n_chars':       l:n_chars,
+            \ 'n_prompt':      l:n_prompt,
+            \ 't_prompt_ms':   l:t_prompt_ms,
+            \ 'n_predict':     l:n_predict,
+            \ 't_predict_ms':  l:t_predict_ms,
+            \ })
+    endif
 endfunction
 
 " if accept_type == 'full', accept entire response
@@ -1517,12 +1556,35 @@ function! llama#fim_accept(accept_type)
             " move cursor for multi-line suggestion
             call cursor(l:pos_y + len(l:content) - 1, len(l:content[-1]) + 1)
         endif
+
+        let l:accepted_n_lines = a:accept_type == 'full' ? len(l:content) : 1
+        let l:accepted_n_chars = 0
+        if a:accept_type == 'full'
+            for l:c in l:content
+                let l:accepted_n_chars += len(l:c)
+            endfor
+        elseif a:accept_type == 'word'
+            let l:accepted_n_chars = len(l:word)
+        else
+            let l:accepted_n_chars = len(l:content[0])
+        endif
+
+        call s:completion_log('accept_' . a:accept_type, {
+            \ 'n_lines':          len(l:content),
+            \ 'accepted_n_lines': l:accepted_n_lines,
+            \ 'accepted_n_chars': l:accepted_n_chars,
+            \ })
+        let s:fim_accepted = v:true
     endif
 
     call llama#fim_hide()
 endfunction
 
 function! llama#fim_hide()
+    if s:fim_hint_shown && !get(s:, 'fim_accepted', v:false)
+        call s:completion_log('dismissed', {})
+    endif
+    let s:fim_accepted = v:false
     let s:fim_hint_shown = v:false
 
     " clear the virtual text
