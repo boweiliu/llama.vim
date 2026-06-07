@@ -914,9 +914,12 @@ function! llama#fim(pos_x, pos_y, is_auto, prev, use_cache) abort
     endif
 
     let l:t_max_predict_ms = g:llama_config.t_max_predict_ms
-    if empty(a:prev)
-        " the first request is quick - we will launch a speculative request after this one is displayed
-        let l:t_max_predict_ms = 250
+    if empty(a:prev) && !a:is_auto
+        " manual trigger: use full configured timeout (important for remote servers)
+        let l:t_max_predict_ms = g:llama_config.t_max_predict_ms
+    elseif empty(a:prev)
+        " auto trigger first request: quick timeout, speculative request follows
+        let l:t_max_predict_ms = max([250, get(g:llama_config, 't_max_predict_first_ms', 250)])
     endif
 
     " compute multiple hashes that can be used to generate a completion for which the
@@ -1028,6 +1031,7 @@ function! llama#fim(pos_x, pos_y, is_auto, prev, use_cache) abort
     endif
 
     " send the request asynchronously
+    call llama#debug_log('fim_request | ' . (a:is_auto ? 'auto' : 'MANUAL') . ' | n_predict=' . g:llama_config.n_predict . ' t_max=' . l:t_max_predict_ms . 'ms')
     let l:request_json = json_encode(l:request)
     if s:ghost_text_nvim
         let s:current_job_fim = jobstart(l:curl_command, {
@@ -1077,17 +1081,20 @@ function! s:fim_on_response(hashes, job_id, data, event = v:null)
 
     " ignore empty results
     if len(l:raw) == 0
+        call llama#debug_log('fim_on_response: empty result from server')
         return
     endif
 
     " ensure the response is valid JSON, starting with a fast check before full decode
     " n_cmpl == 1 returns a single object {"content": ...}, n_cmpl > 1 returns an array [{"content": ...}, ...]
     if (l:raw !~# '^\s*{' && l:raw !~# '^\s*\[') || l:raw !~# '\v"content"\s*:"'
+        call llama#debug_log('fim_on_response: invalid JSON or missing content field', l:raw[:200])
         return
     endif
     try
         let l:decoded = json_decode(l:raw)
     catch
+        call llama#debug_log('fim_on_response: JSON decode failed', v:exception)
         return
     endtry
 
