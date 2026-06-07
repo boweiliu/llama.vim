@@ -860,9 +860,11 @@ function! llama#fim_inline(is_auto, use_cache) abort
         return ''
     endif
 
-    " we already have a suggestion displayed - hide it
+    " we already have a suggestion displayed
     if s:fim_hint_shown && !a:is_auto
+        " manual trigger: hide current hint and re-trigger fresh completion
         call llama#fim_hide()
+    elseif s:fim_hint_shown
         return ''
     endif
 
@@ -892,7 +894,7 @@ function! llama#fim(pos_x, pos_y, is_auto, prev, use_cache) abort
             let s:timer_fim = -1
         endif
 
-        let s:timer_fim = timer_start(100, {-> llama#fim(a:pos_x, a:pos_y, v:true, a:prev, a:use_cache)})
+        let s:timer_fim = timer_start(100, {-> llama#fim(a:pos_x, a:pos_y, a:is_auto, a:prev, a:use_cache)})
         return
     endif
 
